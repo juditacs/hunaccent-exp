@@ -4,6 +4,20 @@ import numpy as np
 from sklearn.feature_extraction import DictVectorizer
 
 
+class Buffer(object):
+
+    buf = []
+
+    @staticmethod
+    def read(stream):
+        if len(Buffer.buf) == 0:
+            Buffer.buf = list(stream)
+
+    def __iter__(self):
+        for line in Buffer.buf:
+            yield line
+
+
 class Featurizer(object):
 
     punct_re = re.compile(r'^[{0}]+$'.format(
@@ -30,6 +44,12 @@ class Featurizer(object):
         self.dictvec = DictVectorizer()
         self.lab_d = {}
         self.lab_i = 0
+
+    def get_params(self):
+        p = {}
+        for attr in ['lower', 'name', 'filter_punct', 'accent_map', 'window', 'lab_d']:
+            p[attr] = getattr(self, attr)
+        return p
 
     @property
     def accent_groups(self):
@@ -63,18 +83,23 @@ class Featurizer(object):
         self.rev_d = dict([(v, k) for k, v in self.lab_d.iteritems()])
         return np.array(converted)  # , rev_d
 
-    def featurize(self, stream):
+    def featurize(self, stream, limit=None):
+        Buffer().read(stream)
         if self.word_only:
-            vec, labels = self.get_featdict_from_lines(stream)
+            vec, labels = self.get_featdict_from_lines(limit=limit)
         else:
-            vec, labels = self.get_with_context(stream)
+            vec, labels = self.get_with_context(limit=limit)
         self.X = vec
         self.y = labels
         return self.dictvec.fit_transform(vec).toarray(), self.convert_labels(labels)
 
-    def get_with_context(self, stream):
+    def get_with_context(self, limit=None):
         text = u''
-        for l in stream:
+        cnt = 0
+        for l in Buffer():
+            cnt += 1
+            if limit is not None and cnt > limit:
+                break
             fd = l.decode('utf8').split('\t')
             if len(fd) < 2:
                 continue
@@ -95,10 +120,14 @@ class Featurizer(object):
                 vectors.append(feats)
         return vectors, labels
 
-    def get_featdict_from_lines(self, lines):
+    def get_featdict_from_lines(self, limit=None):
         vectors = []
         labels = []
-        for line in lines:
+        cnt = 0
+        for line in Buffer():
+            cnt += 1
+            if limit is not None and cnt > limit:
+                break
             word = self.get_word_from_line(line)
             if not word:
                 continue
