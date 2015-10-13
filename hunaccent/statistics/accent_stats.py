@@ -6,6 +6,8 @@ from string import punctuation
 import re
 import logging
 
+logging.getLogger().setLevel(logging.INFO)
+
 
 class AccentStatistic(object):
 
@@ -23,10 +25,11 @@ class AccentStatistic(object):
         self.accent_set = set(accent_map.iterkeys())
         self.char_freq = defaultdict(int)
         self.lower = lower
+        self.word_freq = defaultdict(int)
 
     def process_lines(self, lines):
         for line in lines:
-            word = line.decode('utf8').strip()
+            word = line.decode('utf8', 'ignore').strip()
             if not word.strip():
                 continue
             if self.filter_punct:
@@ -34,6 +37,7 @@ class AccentStatistic(object):
                     continue
             word = word.lower() if self.lower else word
             self.word_types.add(word)
+            self.word_freq[word] += 1
             for c in word:
                 self.char_freq[c] += 1
             self.token_num += 1
@@ -57,8 +61,44 @@ class AccentStatistic(object):
     def accented_ratio(self):
         return float(self.accented_word_num) / self.token_num
 
+    @property
+    def ambiguous_token_ratio(self):
+        baseline_err = 0
+        n = 0
+        for k, v in self.ambiguous.iteritems():
+            freqs = {k: self.word_freq[k]}
+            n += self.word_freq[k]
+            for word in v:
+                freqs[word] = self.word_freq[word]
+                n += self.word_freq[word]
+            #print map(lambda x: unicode(x).encode('utf8'), (k, v, n, self.token_num))
+            most_freq = max(freqs.iteritems(), key=lambda x: x[1])
+            baseline_err += sum(freqs.itervalues()) - most_freq[1]
+        return float(n) / self.token_num, 1 - float(baseline_err) / self.token_num
+
     def print_fancy(self):
-        print('tokens: {0}\ntypes: {1}\naccented ratio: {2}\nlexdif: {3}\nambiguous word type ratio: {4}\nnon-ascii character ratio: {5}'.format(self.token_num, len(self.word_types), self.accented_ratio, self.lexdif, self.ambiguous_ratio(), self.non_ascii_ratio))
+        ambig, bs_acc = self.ambiguous_token_ratio
+        print('tokens: {0}\n'
+              'types: {1}\n'
+              'accented ratio: {2}\n'
+              'lexdif: {3}\n'
+              'ambiguous word type ratio: {4}\n'
+              'non-ascii character ratio: {5}\n'
+              'ambig words: {6}\n'
+              'baseline acc: {7}\n'
+              'accent char ratio: {8}\n'
+              'type/token: {9}'.format(
+                  self.token_num,
+                  len(self.word_types),
+                  self.accented_ratio,
+                  self.lexdif,
+                  self.ambiguous_type_ratio,
+                  self.non_ascii_ratio,
+                  ambig,
+                  bs_acc,
+                  self.get_accent_char_sum(),
+                  len(self.word_types) / float(self.token_num),
+              ))
 
     @property
     def ambiguous(self):
@@ -72,8 +112,16 @@ class AccentStatistic(object):
                     self._ambig[tgt] = sources
         return self._ambig
 
-    def ambiguous_ratio(self):
+    @property
+    def ambiguous_type_ratio(self):
         return float(sum(map(len, self.ambiguous.itervalues()))) / len(self.word_types)
+
+    def get_accent_char_sum(self):
+        s = 0
+        for c, cnt in self.char_freq.iteritems():
+            if c in self.accent_map:
+                s += cnt
+        return float(s) / sum(self.char_freq.itervalues())
 
     def print_ambiguous(self):
         for tgt, sources in self.ambiguous.iteritems():
@@ -94,11 +142,26 @@ class AccentStatistic(object):
     def print_non_ascii_chars(self):
         print('\n'.join(u'{0}\t{1}\t{2}'.format(c, cnt, r).encode('utf8') for c, cnt, r in self.get_non_ascii_chars()))
 
+    def print_char_stats(self):
+        N = float(sum(self.char_freq.itervalues()))
+        accents = set(self.accent_set) | set(self.accent_map.itervalues())
+        for i, tgt in enumerate(sorted(set(self.accent_map.itervalues()))):
+            print(u'{0}  && {1}\\% \\\\'.format(tgt, round(100 * self.char_freq[tgt] / N, 4)).encode('utf8'))
+            for src, t in sorted(self.accent_map.iteritems()):
+                if t != tgt:
+                    continue
+                if src == tgt:
+                    continue
+                print(u'{0}  & {1} & {2}\\% \\\\'.format(src, tgt, round(100 * self.char_freq[src] / N, 4)).encode('utf8'))
+            if i < 4:
+                print('\\midrule')
+
 
 def parse_args():
     p = ArgumentParser()
     p.add_argument('--filter-punct', action='store_true', default=False)
     p.add_argument('-l', '--lower', action='store_true', default=False)
+    p.add_argument('--char-stats', action='store_true', default=False)
     p.add_argument('-v', '--verbose', action='store_true', default=False)
     p.add_argument('--accents', type=str, default='áaéeíióoöoőoúuüuűu',
                    help='accent mapping')
@@ -129,7 +192,8 @@ def main():
         stats.print_ambiguous()
         stats.print_non_ascii_chars()
     stats.print_fancy()
-
+    if args.char_stats:
+        stats.print_char_stats()
 
 if __name__ == '__main__':
     main()
