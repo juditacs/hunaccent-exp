@@ -6,46 +6,62 @@ from sklearn import cross_validation
 from ConfigParser import ConfigParser
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
+from sklearn.svm import SVC, LinearSVC
 from sklearn.preprocessing import StandardScaler
 import logging
 
 logging.getLogger().setLevel(logging.INFO)
+FORMAT = '%(asctime)-15s %(message)s'
+logging.basicConfig(format=FORMAT)
 
 from featurize import Featurizer
 
 
 class Experiment(object):
 
-    def __init__(self, featurizer, pipeline, cv=5, limit=None):
+    def __init__(self, featurizer, pipeline, cv=5, limit=None, sample_per_class=None, balanced=False):
         self.featurizer = featurizer
         self.pipeline = pipeline
         self.cv = cv
         self.input_ = None
         self.limit = limit
+        self.sample_per_class = sample_per_class
+        self.balanced = balanced
 
     def set_input_(self, input_):
         self.input_ = input_
 
     def run(self):
         X, y = self.featurizer.featurize(self.input_, limit=self.limit)
+        logging.info('Featurized')
         self.X = X
         self.y = y
-        self.full_result = list(cross_validation.cross_val_score(self.pipeline['pipeline'], X, y, cv=self.cv))
-        self.full_avg = sum(self.full_result) / float(len(self.full_result))
+        #self.full_result = list(cross_validation.cross_val_score(self.pipeline['pipeline'], X, y, cv=self.cv))
+        #self.full_avg = sum(self.full_result) / float(len(self.full_result))
+        self.full_result = None
+        self.full_avg = None
+        logging.info('Acc: {0}'.format(self.full_avg))
         self.full_size = [X.shape[0], X.shape[1]]
         self.group_results = {}
         self.group_size = {}
         self.group_avg = {}
         for group in self.featurizer.accent_groups.iterkeys():
-            filt_x, filt_y = self.featurizer.filter_to_group(group)
-            self.group_size[group] = [filt_x.shape[0], filt_x.shape[1]]
+            logging.info('Group {}'.format(group))
+            filt_x, filt_y = self.featurizer.filter_to_group(group, balanced=self.balanced, sample_per_class=self.sample_per_class)
+            y_size = {}
+            for x in filt_y:
+                if not x in y_size:
+                    y_size[x] = 0
+                y_size[x] += 1
+            self.group_size[group] = [filt_x.shape[0], filt_x.shape[1], y_size.items()]
             self.group_results[group] = list(cross_validation.cross_val_score(self.pipeline['pipeline'], filt_x, filt_y, cv=self.cv))
             self.group_avg[group] = sum(self.group_results[group]) / float(len(self.group_results[group]))
+            logging.info('Group acc: {0}'.format(self.group_avg[group]))
+        logging.info(str(self.group_avg))
 
     def save_results(self, fh):
         res_d = {}
-        for attr in ['cv', 'limit', 'full_result', 'group_results', 'full_size', 'group_size', 'full_avg', 'group_avg']:
+        for attr in ['cv', 'limit', 'full_result', 'group_results', 'full_size', 'group_size', 'full_avg', 'group_avg', 'sample_per_class']:
             res_d[attr] = getattr(self, attr)
         res_d['featurizer'] = self.featurizer.get_params()
         res_d['pipeline'] = self.pipeline['params']
@@ -95,7 +111,7 @@ class ExperimentHandler(object):
                     val = cfg.get(sec, option)
                     try:
                         val = float(val)
-                    except TypeError:
+                    except ValueError:
                         pass
                     cls_kwargs[opt] = val
             standardize = cfg.getboolean(sec, 'standardize')
@@ -104,6 +120,8 @@ class ExperimentHandler(object):
                 ext.append(('standardize', StandardScaler()))
             if cls_type == 'SVC':
                 ext.append(('svm', SVC(**cls_kwargs)))
+            elif cls_type == 'linearsvc':
+                ext.append(('svm', LinearSVC(**cls_kwargs)))
             elif cls_type == 'logreg':
                 ext.append(('logreg', LogisticRegression(**cls_kwargs)))
             p = Pipeline(ext)
@@ -113,6 +131,7 @@ class ExperimentHandler(object):
             self.pipelines[name]['params']['standardize'] = standardize
 
     def read_experiments(self, cfg):
+        self.cfg = cfg
         for sec in cfg.sections():
             if not sec.startswith('experiment'):
                 continue
@@ -121,7 +140,11 @@ class ExperimentHandler(object):
             pipeline = self.pipelines[cfg.get(sec, 'pipeline')]
             cv = cfg.getint(sec, 'cv')
             limit = cfg.getint(sec, 'limit')
-            e = Experiment(featurizer, pipeline, cv, limit)
+            try:
+                sample_per_class = cfg.getint(sec, 'sample_per_class')
+            except:
+                sample_per_class = 1000
+            e = Experiment(featurizer, pipeline, cv, limit, sample_per_class=sample_per_class)
             self.experiments[name] = e
 
     def set_input(self, input_):
@@ -132,6 +155,7 @@ class ExperimentHandler(object):
         res_fn = open(self.results_fn, 'a+')
         for ename, e in self.experiments.iteritems():
             logging.info('Running experiment: {0}'.format(ename))
+            logging.info(str(self.cfg.items('experiment_{0}'.format(ename))))
             e.run()
             e.save_results(res_fn)
         res_fn.close()

@@ -1,4 +1,5 @@
 from string import punctuation
+from collections import defaultdict
 import re
 import numpy as np
 from sklearn.feature_extraction import DictVectorizer
@@ -47,7 +48,7 @@ class Featurizer(object):
 
     def get_params(self):
         p = {}
-        for attr in ['lower', 'name', 'filter_punct', 'accent_map', 'window', 'lab_d']:
+        for attr in ['lower', 'name', 'filter_punct', 'window']:
             p[attr] = getattr(self, attr)
         return p
 
@@ -62,13 +63,21 @@ class Featurizer(object):
                 self._accent_groups[tgt].add(src)
         return self._accent_groups
 
-    def filter_to_group(self, group):
+    def filter_to_group(self, group, balanced=False, sample_per_class=10000):
         filt_x = []
         filt_y = []
+        cnt = {}
+        for member in self.accent_groups[group]:
+            cnt[member] = 0
         for i, ch in enumerate(self.y):
             if ch in self.accent_groups[group]:
+                if balanced and cnt[ch] >= sample_per_class:
+                    continue
                 filt_y.append(self.lab_d[ch])
                 filt_x.append(self.X[i])
+                cnt[ch] += 1
+            if balanced and all(x > sample_per_class for x in cnt.itervalues()):
+                break
         return self.dictvec.fit_transform(filt_x).toarray(), np.array(filt_y)
 
     def convert_labels(self, labels):
@@ -113,8 +122,14 @@ class Featurizer(object):
         ngrams = ['BEG'] * self.window + list(''.join(self.accent_map.get(c, c) for c in text)) + ['END'] * self.window
         vectors = []
         labels = []
+        cnt = defaultdict(int)
         for i, c in enumerate(text):
+            if cnt and all(v >= 50000 for v in cnt.itervalues()):
+                break
             if c in self.accent_chars:
+                if cnt[c] >= 50000:
+                    continue
+                cnt[c] += 1
                 labels.append(c)
                 feats = self.extract_features(ngrams, i + self.window)
                 vectors.append(feats)
